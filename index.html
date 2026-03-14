@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Neon Chaser</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Neon Chaser V3: Apex Protocol</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
@@ -13,9 +13,30 @@
             font-family: 'Courier New', Courier, monospace;
             overflow: hidden;
             color: #fff;
+            touch-action: none;
+            -webkit-user-select: none;
+            user-select: none;
+            transition: filter 0.2s ease-out;
         }
 
-        /* CRT Scanline Overlay */
+        /* The Inversion Magic */
+        body.inverted {
+            filter: invert(1) hue-rotate(180deg);
+        }
+
+        /* Screen Shake Juice */
+        @keyframes shake {
+            0% { transform: translate(10px, 10px) rotate(0deg); }
+            20% { transform: translate(-10px, -5px) rotate(-1deg); }
+            40% { transform: translate(5px, 10px) rotate(1deg); }
+            60% { transform: translate(-10px, 5px) rotate(0deg); }
+            80% { transform: translate(10px, -10px) rotate(-1deg); }
+            100% { transform: translate(0, 0) rotate(0deg); }
+        }
+        body.shaking {
+            animation: shake 0.3s cubic-bezier(.36,.07,.19,.97) both;
+        }
+
         body::after {
             content: "";
             position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
@@ -24,15 +45,20 @@
             z-index: 10; pointer-events: none;
         }
 
-        #game-canvas {
-            display: block; width: 100vw; height: 100vh;
-        }
+        #game-canvas { display: block; width: 100vw; height: 100vh; }
 
-        /* Glassmorphism UI */
         #ui-layer {
             position: absolute; top: 20px; left: 20px;
             z-index: 5; pointer-events: none;
+            transition: all 0.3s;
         }
+
+        /* Visual indicator for Bullet Time */
+        #ui-layer.dilated .score-board {
+            border-color: #ff0055;
+            box-shadow: 0 0 30px rgba(255, 0, 85, 0.6);
+        }
+        #ui-layer.dilated h1 { color: #ff0055; text-shadow: 0 0 10px #ff0055; }
 
         .score-board {
             background: rgba(10, 10, 15, 0.6);
@@ -41,10 +67,17 @@
             border-radius: 12px;
             padding: 15px 25px;
             box-shadow: 0 0 20px rgba(0, 243, 255, 0.2);
+            transition: all 0.3s ease;
         }
 
-        h1 { font-size: 1.2rem; letter-spacing: 2px; color: #00f3ff; text-shadow: 0 0 10px #00f3ff; margin-bottom: 5px; }
+        h1 { font-size: 1.2rem; letter-spacing: 2px; color: #00f3ff; text-shadow: 0 0 10px #00f3ff; margin-bottom: 5px; transition: color 0.3s;}
         #score { font-size: 2.5rem; font-weight: bold; color: #fff; text-shadow: 0 0 10px #fff; }
+
+        #status-text {
+            font-size: 1rem; color: #fff; margin-top: 10px;
+            text-shadow: 0 0 10px #fff; font-weight: bold; letter-spacing: 1px;
+            opacity: 0; transition: opacity 0.2s;
+        }
 
         #game-over {
             position: absolute; top: 50%; left: 50%;
@@ -57,8 +90,8 @@
             display: none;
         }
         
-        #game-over h2 { color: #ff0055; font-size: 3rem; margin-bottom: 10px; text-shadow: 0 0 20px #ff0055;}
-        #game-over p { font-size: 1.2rem; margin-bottom: 20px; }
+        #game-over h2 { color: #ff0055; font-size: 2.5rem; margin-bottom: 10px; text-shadow: 0 0 20px #ff0055;}
+        #game-over p { font-size: 1rem; margin-bottom: 20px; }
         
         button {
             background: transparent; border: 2px solid #00f3ff;
@@ -77,6 +110,7 @@
         <div class="score-board">
             <h1>DATA CORES</h1>
             <div id="score">0</div>
+            <div id="status-text">INVERSION ACTIVE</div>
         </div>
     </div>
 
@@ -93,11 +127,18 @@
         const ctx = canvas.getContext('2d');
         const scoreEl = document.getElementById('score');
         const gameOverEl = document.getElementById('game-over');
+        const uiLayer = document.getElementById('ui-layer');
+        const statusText = document.getElementById('status-text');
 
-        let width, height;
-        let animationId;
+        let width, height, animationId;
         let score = 0;
         let gameActive = true;
+        
+        // Game Mechanics State
+        let timeScale = 1;
+        let isInverted = false;
+        let inversionTimer = null;
+        let nextPowerCoreScore = 100;
 
         function resize() {
             width = canvas.width = window.innerWidth;
@@ -106,13 +147,38 @@
         window.addEventListener('resize', resize);
         resize();
 
-        // Input Tracking
+        // === INPUT TRACKING (Keyboard + Touch) ===
         const keys = { w: false, a: false, s: false, d: false, ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false };
         window.addEventListener('keydown', e => { if(keys.hasOwnProperty(e.key)) keys[e.key] = true; });
         window.addEventListener('keyup', e => { if(keys.hasOwnProperty(e.key)) keys[e.key] = false; });
 
-        // Math helper
+        let touchActive = false;
+        let touchStartX = 0, touchStartY = 0, touchCurrentX = 0, touchCurrentY = 0;
+
+        canvas.addEventListener('touchstart', e => {
+            if (!gameActive) return;
+            e.preventDefault(); 
+            touchActive = true;
+            touchStartX = touchCurrentX = e.touches[0].clientX;
+            touchStartY = touchCurrentY = e.touches[0].clientY;
+        }, { passive: false });
+
+        canvas.addEventListener('touchmove', e => {
+            if (!touchActive || !gameActive) return;
+            e.preventDefault();
+            touchCurrentX = e.touches[0].clientX;
+            touchCurrentY = e.touches[0].clientY;
+        }, { passive: false });
+
+        canvas.addEventListener('touchend', e => { e.preventDefault(); touchActive = false; }, { passive: false });
+
         function dist(x1, y1, x2, y2) { return Math.hypot(x2 - x1, y2 - y1); }
+
+        function triggerShake() {
+            document.body.classList.remove('shaking');
+            void document.body.offsetWidth; // Trigger reflow to restart animation
+            document.body.classList.add('shaking');
+        }
 
         /* === ENTITY CLASSES === */
         class Player {
@@ -120,20 +186,32 @@
                 this.x = width / 2; this.y = height / 2;
                 this.radius = 15;
                 this.vx = 0; this.vy = 0;
-                this.speed = 0.6; this.friction = 0.92;
+                this.speed = 1.2; 
+                this.friction = 0.92;
                 this.color = '#00f3ff';
             }
             update() {
-                // Movement logic
-                if (keys.w || keys.ArrowUp) this.vy -= this.speed;
-                if (keys.s || keys.ArrowDown) this.vy += this.speed;
-                if (keys.a || keys.ArrowLeft) this.vx -= this.speed;
-                if (keys.d || keys.ArrowRight) this.vx += this.speed;
+                if (touchActive) {
+                    const dx = touchCurrentX - touchStartX;
+                    const dy = touchCurrentY - touchStartY;
+                    const distance = Math.hypot(dx, dy);
+                    if (distance > 5) {
+                        const force = Math.min(distance, 50) / 50; 
+                        const angle = Math.atan2(dy, dx);
+                        this.vx += Math.cos(angle) * this.speed * force * timeScale;
+                        this.vy += Math.sin(angle) * this.speed * force * timeScale;
+                    }
+                } else {
+                    if (keys.w || keys.ArrowUp) this.vy -= this.speed * timeScale;
+                    if (keys.s || keys.ArrowDown) this.vy += this.speed * timeScale;
+                    if (keys.a || keys.ArrowLeft) this.vx -= this.speed * timeScale;
+                    if (keys.d || keys.ArrowRight) this.vx += this.speed * timeScale;
+                }
 
+                // Time scale affects friction slightly to maintain smooth sliding in slow-mo
                 this.vx *= this.friction; this.vy *= this.friction;
                 this.x += this.vx; this.y += this.vy;
 
-                // Wrap around screen (The Madness!)
                 if (this.x < -this.radius) this.x = width + this.radius;
                 if (this.x > width + this.radius) this.x = -this.radius;
                 if (this.y < -this.radius) this.y = height + this.radius;
@@ -144,7 +222,7 @@
                 ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
                 ctx.fillStyle = this.color;
                 ctx.shadowBlur = 20; ctx.shadowColor = this.color;
-                ctx.fill(); ctx.shadowBlur = 0; // Reset shadow
+                ctx.fill(); ctx.shadowBlur = 0; 
             }
         }
 
@@ -152,22 +230,33 @@
             constructor(x, y) {
                 this.x = x; this.y = y;
                 this.radius = 18;
-                // Enemies start slow but we can increase speed later
                 this.speed = Math.random() * 1.5 + 1; 
                 this.color = '#ff0055';
             }
             update() {
-                // Basic AI: Constantly move towards player
                 const angle = Math.atan2(player.y - this.y, player.x - this.x);
-                this.x += Math.cos(angle) * this.speed;
-                this.y += Math.sin(angle) * this.speed;
+                // If inverted, run AWAY from the player. Otherwise, chase.
+                const direction = isInverted ? -1 : 1; 
+                
+                // Enemies get a slight speed boost when running away out of fear
+                const currentSpeed = isInverted ? this.speed * 1.2 : this.speed;
+
+                this.x += Math.cos(angle) * currentSpeed * direction * timeScale;
+                this.y += Math.sin(angle) * currentSpeed * direction * timeScale;
+                
+                // Wrap around screen if they run away too far
+                if (this.x < -this.radius) this.x = width + this.radius;
+                if (this.x > width + this.radius) this.x = -this.radius;
+                if (this.y < -this.radius) this.y = height + this.radius;
+                if (this.y > height + this.radius) this.y = -this.radius;
             }
             draw() {
                 ctx.beginPath();
-                // Draw a spiked/square enemy for contrast
                 ctx.rect(this.x - this.radius, this.y - this.radius, this.radius*2, this.radius*2);
-                ctx.strokeStyle = this.color; ctx.lineWidth = 3;
-                ctx.shadowBlur = 15; ctx.shadowColor = this.color;
+                // Change visual state when fleeing
+                ctx.strokeStyle = isInverted ? '#00f3ff' : this.color; 
+                ctx.lineWidth = 3;
+                ctx.shadowBlur = 15; ctx.shadowColor = isInverted ? '#00f3ff' : this.color;
                 ctx.stroke(); ctx.shadowBlur = 0;
             }
         }
@@ -181,12 +270,31 @@
                 this.pulse = 0;
             }
             draw() {
-                this.pulse += 0.1;
+                this.pulse += 0.1 * timeScale;
                 const currentRadius = this.radius + Math.sin(this.pulse) * 2;
                 ctx.beginPath();
                 ctx.arc(this.x, this.y, currentRadius, 0, Math.PI * 2);
                 ctx.fillStyle = this.color;
                 ctx.shadowBlur = 15; ctx.shadowColor = this.color;
+                ctx.fill(); ctx.shadowBlur = 0;
+            }
+        }
+
+        class PowerCore {
+            constructor() {
+                this.radius = 12;
+                this.x = Math.random() * (width - 60) + 30;
+                this.y = Math.random() * (height - 60) + 30;
+                this.color = '#ffffff';
+                this.pulse = 0;
+            }
+            draw() {
+                this.pulse += 0.2 * timeScale;
+                const currentRadius = this.radius + Math.sin(this.pulse) * 4;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, currentRadius, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.shadowBlur = 30; ctx.shadowColor = this.color;
                 ctx.fill(); ctx.shadowBlur = 0;
             }
         }
@@ -203,8 +311,8 @@
                 this.alpha = 1;
             }
             update() {
-                this.x += this.vx; this.y += this.vy;
-                this.alpha -= 0.02; // Fade out
+                this.x += this.vx * timeScale; this.y += this.vy * timeScale;
+                this.alpha -= 0.02 * timeScale; 
             }
             draw() {
                 ctx.save();
@@ -221,10 +329,10 @@
         let player = new Player();
         let enemies = [];
         let dots = [new Dot()];
+        let powerCores = [];
         let particles = [];
 
         function spawnEnemy() {
-            // Spawn enemy far away from player
             let x, y;
             if (Math.random() < 0.5) {
                 x = Math.random() < 0.5 ? -30 : width + 30;
@@ -242,12 +350,68 @@
             }
         }
 
+        function triggerInversion() {
+            isInverted = true;
+            document.body.classList.add('inverted');
+            statusText.style.opacity = 1;
+            
+            triggerShake();
+
+            if (inversionTimer) clearTimeout(inversionTimer);
+            
+            // Inversion lasts for 6 seconds
+            inversionTimer = setTimeout(() => {
+                isInverted = false;
+                document.body.classList.remove('inverted');
+                statusText.style.opacity = 0;
+            }, 6000);
+        }
+
+        function drawJoystick() {
+            if (!touchActive) return;
+            ctx.beginPath();
+            ctx.arc(touchStartX, touchStartY, 40, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(0, 243, 255, 0.2)';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            const dx = touchCurrentX - touchStartX;
+            const dy = touchCurrentY - touchStartY;
+            const distance = Math.hypot(dx, dy);
+            const angle = Math.atan2(dy, dx);
+            const visualDist = Math.min(distance, 40);
+            
+            const knobX = touchStartX + Math.cos(angle) * visualDist;
+            const knobY = touchStartY + Math.sin(angle) * visualDist;
+
+            ctx.beginPath();
+            ctx.arc(knobX, knobY, 15, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(0, 243, 255, 0.6)';
+            ctx.fill();
+        }
+
         /* === THE ENGINE === */
         function animate() {
             if (!gameActive) return;
             animationId = requestAnimationFrame(animate);
 
-            // Additive blending for that neon glow effect + motion blur trail
+            // --- TIME DILATION LOGIC ---
+            let closestEnemyDist = Infinity;
+            enemies.forEach(e => {
+                let d = dist(player.x, player.y, e.x, e.y);
+                if (d < closestEnemyDist) closestEnemyDist = d;
+            });
+
+            // If an enemy is within 100px and we aren't hunting them, slow time to 25%
+            if (closestEnemyDist < 100 && !isInverted) {
+                timeScale = 0.25; 
+                uiLayer.classList.add('dilated');
+            } else {
+                timeScale = 1;
+                uiLayer.classList.remove('dilated');
+            }
+            // ---------------------------
+
             ctx.globalCompositeOperation = 'source-over';
             ctx.fillStyle = 'rgba(5, 5, 8, 0.3)'; 
             ctx.fillRect(0, 0, width, height);
@@ -256,59 +420,94 @@
             player.update();
             player.draw();
 
-            // Handle Particles
             particles.forEach((p, index) => {
                 if (p.alpha <= 0) particles.splice(index, 1);
                 else { p.update(); p.draw(); }
             });
 
-            // Handle Dots
+            // Standard Dots
             dots.forEach((dot, index) => {
                 dot.draw();
-                // Collision: Player eats Dot
                 if (dist(player.x, player.y, dot.x, dot.y) < player.radius + dot.radius) {
                     dots.splice(index, 1);
                     score += 10;
                     scoreEl.innerText = score;
                     createExplosion(dot.x, dot.y, dot.color, 15);
-                    
-                    // Spawn a new dot
                     dots.push(new Dot());
                     
-                    // The Madness Escalates: Spawn a new enemy every 50 points
                     if (score % 50 === 0) spawnEnemy();
+                    
+                    // Spawn Power Core every 100 points
+                    if (score >= nextPowerCoreScore) {
+                        powerCores.push(new PowerCore());
+                        nextPowerCoreScore += 100;
+                    }
                 }
             });
 
-            // Handle Enemies
-            enemies.forEach(enemy => {
-                enemy.update();
-                enemy.draw();
-                // Collision: Enemy hits Player
-                if (dist(player.x, player.y, enemy.x, enemy.y) < player.radius + enemy.radius - 5) {
-                    gameActive = false;
-                    createExplosion(player.x, player.y, player.color, 50);
-                    setTimeout(() => { gameOverEl.style.display = 'block'; }, 500);
+            // Power Cores
+            powerCores.forEach((core, index) => {
+                core.draw();
+                if (dist(player.x, player.y, core.x, core.y) < player.radius + core.radius) {
+                    powerCores.splice(index, 1);
+                    createExplosion(core.x, core.y, '#ffffff', 30);
+                    triggerInversion();
                 }
             });
+
+            // Enemies
+            enemies.forEach((enemy, index) => {
+                enemy.update();
+                enemy.draw();
+                
+                if (dist(player.x, player.y, enemy.x, enemy.y) < player.radius + enemy.radius - 5) {
+                    if (isInverted) {
+                        // WE ARE THE HUNTER
+                        createExplosion(enemy.x, enemy.y, enemy.color, 40);
+                        enemies.splice(index, 1);
+                        score += 50; 
+                        scoreEl.innerText = score;
+                        triggerShake();
+                        
+                        // Respawn them far away after eating them so the game doesn't get empty
+                        setTimeout(spawnEnemy, 2000);
+                    } else {
+                        // WE ARE THE PREY
+                        gameActive = false;
+                        touchActive = false;
+                        createExplosion(player.x, player.y, player.color, 50);
+                        document.body.classList.remove('inverted');
+                        triggerShake();
+                        setTimeout(() => { gameOverEl.style.display = 'block'; }, 500);
+                    }
+                }
+            });
+
+            drawJoystick();
         }
 
         function resetGame() {
             score = 0; scoreEl.innerText = score;
+            nextPowerCoreScore = 100;
             player = new Player();
             enemies = [];
             dots = [new Dot()];
+            powerCores = [];
             particles = [];
             gameActive = true;
+            touchActive = false;
+            isInverted = false;
+            document.body.classList.remove('inverted');
+            uiLayer.classList.remove('dilated');
+            statusText.style.opacity = 0;
+            if (inversionTimer) clearTimeout(inversionTimer);
             gameOverEl.style.display = 'none';
-            // Start with one enemy
+            
             spawnEnemy();
             animate();
         }
 
-        // Boot Sequence
         resetGame();
-
     </script>
 </body>
 </html>

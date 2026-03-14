@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Omni-Deck</title>
+    <style>
+        /* === 1. RESET & FOUNDATION === */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body, html {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            background-color: #03030b;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            color: #fff;
+        }
+
+        /* === 2. THE PARTICLE CANVAS === */
+        #particle-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        /* === 3. THE OMNI-DECK GRID === */
+        .omni-deck {
+            position: relative;
+            z-index: 1;
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            grid-template-rows: repeat(2, 1fr);
+            gap: 2rem;
+            width: 100vw;
+            height: 100vh;
+            padding: 2rem;
+            /* Creates the 3D space for the children to tilt within */
+            perspective: 2000px; 
+        }
+
+        /* === 4. NEON GLASSMORPHISM CARDS === */
+        .card {
+            position: relative;
+            border-radius: 24px;
+            padding: 1.25rem; /* Acts as the interactive rim for the 3D hover */
+            background: rgba(20, 20, 35, 0.25);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            
+            /* The base neon borders */
+            border: 1px solid rgba(0, 243, 255, 0.3);
+            
+            /* Smooth transitions for the 3D snap-back */
+            transition: transform 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
+            transform-style: preserve-3d;
+            
+            /* Breathing Neon Glow */
+            animation: neon-breathe 4s infinite alternate ease-in-out;
+            
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* Offset the animation delay so they don't pulse at the exact same time */
+        .card:nth-child(2) { animation-delay: -1s; }
+        .card:nth-child(3) { animation-delay: -2s; }
+        .card:nth-child(4) { animation-delay: -3s; }
+
+        @keyframes neon-breathe {
+            0% {
+                box-shadow: 
+                    0 0 15px rgba(0, 243, 255, 0.1), 
+                    inset 0 0 20px rgba(255, 0, 255, 0.1);
+                border-color: rgba(0, 243, 255, 0.3);
+            }
+            100% {
+                box-shadow: 
+                    0 0 30px rgba(255, 0, 255, 0.4), 
+                    inset 0 0 40px rgba(0, 243, 255, 0.3);
+                border-color: rgba(255, 0, 255, 0.6);
+            }
+        }
+
+        /* === 5. IFRAME STYLING === */
+        .card iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+            border-radius: 14px;
+            background: #000;
+            /* Keeps the iframe slightly elevated in 3D space */
+            transform: translateZ(30px); 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="particle-canvas"></canvas>
+
+    <div class="omni-deck">
+        <div class="card" id="card-1">
+            <iframe src="https://text.npr.org/" title="NPR Text"></iframe>
+        </div>
+        <div class="card" id="card-2">
+            <iframe src="https://earth.nullschool.net/" title="Earth Nullschool"></iframe>
+        </div>
+        <div class="card" id="card-3">
+            <iframe src="https://gabrielecirulli.github.io/2048/" title="2048 Game"></iframe>
+        </div>
+        <div class="card" id="card-4">
+            <iframe src="https://www.youtube.com/embed/2gXGvXqlk3M?autoplay=1&mute=1" title="Live Jellyfish" allow="autoplay"></iframe>
+        </div>
+    </div>
+
+    <script>
+        /* =========================================
+           EFFECT 1: BUTTERY 3D MOUSE TILT
+           ========================================= */
+        const cards = document.querySelectorAll('.card');
+
+        cards.forEach(card => {
+            // When mouse moves over the protective padding rim
+            card.addEventListener('mousemove', (e) => {
+                const rect = card.getBoundingClientRect();
+                
+                // Calculate mouse position relative to the center of the card
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                const centerX = rect.width / 2;
+                const centerY = rect.height / 2;
+                
+                // Map position to a rotation degree (max 4 degrees for subtlety)
+                const rotateX = ((y - centerY) / centerY) * -4; 
+                const rotateY = ((x - centerX) / centerX) * 4;
+
+                // Apply the transform instantly while moving
+                card.style.transition = 'none';
+                card.style.transform = `perspective(1000px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) scale3d(1.02, 1.02, 1.02)`;
+            });
+
+            // When mouse leaves the rim (either exiting the card OR entering the iframe)
+            card.addEventListener('mouseleave', () => {
+                // Re-enable the CSS transition for a smooth snap-back
+                card.style.transition = 'transform 0.4s cubic-bezier(0.25, 0.8, 0.25, 1)';
+                card.style.transform = `perspective(1000px) rotateX(0deg) rotateY(0deg) scale3d(1, 1, 1)`;
+            });
+        });
+
+        /* =========================================
+           EFFECT 2: LIGHTWEIGHT PARTICLE SYSTEM
+           ========================================= */
+        const canvas = document.getElementById('particle-canvas');
+        const ctx = canvas.getContext('2d');
+        
+        let width, height;
+        let particles = [];
+
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        class Particle {
+            constructor() {
+                this.x = Math.random() * width;
+                this.y = Math.random() * height;
+                this.size = Math.random() * 1.5 + 0.5;
+                // Slow drift upwards and slightly sideways
+                this.vx = (Math.random() - 0.5) * 0.3;
+                this.vy = (Math.random() - 1) * 0.5;
+                // Mix of Cyan and Magenta hues
+                this.color = Math.random() > 0.5 ? 'rgba(0, 243, 255, 0.6)' : 'rgba(255, 0, 255, 0.6)';
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+
+                // Wrap around edges
+                if (this.x < 0) this.x = width;
+                if (this.x > width) this.x = 0;
+                if (this.y < 0) this.y = height;
+                if (this.y > height) this.y = 0;
+            }
+
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.fill();
+            }
+        }
+
+        // Initialize 100 particles
+        for (let i = 0; i < 100; i++) {
+            particles.push(new Particle());
+        }
+
+        // The Animation Loop
+        function animate() {
+            ctx.clearRect(0, 0, width, height);
+            particles.forEach(p => {
+                p.update();
+                p.draw();
+            });
+            requestAnimationFrame(animate);
+        }
+        
+        animate();
+    </script>
+</body>
+</html>
